@@ -1,0 +1,9 @@
+{
+  "model_name": "gemini-2.5-flash (simple)",
+  "test_time": "2025-07-09T08:59:40.832777",
+  "total_samples": 10,
+  "successful_tests": 0,
+  "avg_jaccard": 0.0,
+  "avg_word_accuracy": 0.0,
+  "detailed_results": []
+}

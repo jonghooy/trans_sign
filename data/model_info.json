@@ -1,0 +1,8 @@
+{
+  "fine_tuned_model_id": "ft:gpt-4.1-2025-04-14:personal:sign-korean-translator:Box9xvlH",
+  "job_id": "ftjob-l8icJDOiEK2K2RHXrKgLu6z9",
+  "base_model": "gpt-4.1-2025-04-14",
+  "status": "succeeded",
+  "created_at": 1751414787,
+  "finished_at": 1751483506
+}
