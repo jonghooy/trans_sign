@@ -35,7 +35,6 @@ yarn-error.log*
 
 # API keys and service account files
 *-service-key.json
-gemini-service-key.json
 
 # vercel
 .vercel
@@ -43,3 +42,32 @@ gemini-service-key.json
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# 대용량 데이터 파일들
+*.jsonl
+*.xlsx
+*_done.csv
+*_results*.json
+*_summary*.csv
+
+# Python 관련
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+env/
+venv/
+ENV/
+env.bak/
+venv.bak/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
