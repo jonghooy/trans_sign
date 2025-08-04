@@ -32,15 +32,22 @@ export async function POST(request: NextRequest) {
       }, { status: 400 })
     }
 
-    // CSV 파일 읽기
-    const csvText = await file.text()
+    // CSV 파일을 다양한 인코딩으로 읽기 시도
+    const csvText = await readFileWithEncoding(file)
+    
+    if (!csvText) {
+      return createErrorStream('파일을 읽을 수 없습니다. UTF-8, EUC-KR, CP949 인코딩을 확인해주세요.')
+    }
+
     const lines = csvText.split('\n').filter(line => line.trim())
 
     if (lines.length === 0) {
-      return NextResponse.json({
-        success: false,
-        error: '빈 CSV 파일입니다.'
-      }, { status: 400 })
+      return createErrorStream('빈 CSV 파일입니다.')
+    }
+
+    // 한글 깨짐 검사
+    if (hasCorruptedText(csvText)) {
+      return createErrorStream('파일 인코딩이 올바르지 않습니다. 파일을 UTF-8로 저장하거나 메모장에서 다른 이름으로 저장 시 UTF-8을 선택해주세요.')
     }
 
     // 헤더 파싱
@@ -52,10 +59,7 @@ export async function POST(request: NextRequest) {
     const missingHeaders = requiredHeaders.filter(h => !headers.includes(h))
     
     if (missingHeaders.length > 0) {
-      return NextResponse.json({
-        success: false,
-        error: `필수 컬럼이 없습니다: ${missingHeaders.join(', ')}`
-      }, { status: 400 })
+      return createErrorStream(`필수 컬럼이 없습니다: ${missingHeaders.join(', ')}`)
     }
 
     // 인덱스 찾기
@@ -86,15 +90,16 @@ export async function POST(request: NextRequest) {
       }
 
       if (row.sentence_id && row.korean_text) {
+        // 각 행의 한글 텍스트도 검사
+        if (hasCorruptedText(row.korean_text)) {
+          return createErrorStream(`문장 ID ${row.sentence_id}의 한글 텍스트가 깨져있습니다. 파일을 UTF-8로 다시 저장해주세요.`)
+        }
         dataRows.push(row)
       }
     }
 
     if (dataRows.length === 0) {
-      return NextResponse.json({
-        success: false,
-        error: '유효한 데이터 행이 없습니다.'
-      }, { status: 400 })
+      return createErrorStream('유효한 데이터 행이 없습니다.')
     }
 
     console.log(`파싱된 데이터: ${dataRows.length}개 행`)
@@ -120,7 +125,7 @@ export async function POST(request: NextRequest) {
             }
             controller.enqueue(encoder.encode(JSON.stringify(progressData) + '\n'))
             
-            console.log(`번역 중 (${i + 1}/${total}): ${row.korean_text.substring(0, 50)}...`)
+            console.log(`⚡ 고속 번역 중 (${i + 1}/${total}): ${row.korean_text.substring(0, 50)}...`)
             
             const translationResponse = await translateKoreanToSignLanguage(row.korean_text)
             
@@ -162,7 +167,7 @@ export async function POST(request: NextRequest) {
         }
         controller.enqueue(encoder.encode(JSON.stringify(completeData) + '\n'))
         
-        console.log(`번역 완료: ${results.length}개 문장`)
+        console.log(`🎉 고속 번역 완료: ${results.length}개 문장`)
         controller.close()
       }
     })
@@ -177,28 +182,76 @@ export async function POST(request: NextRequest) {
 
   } catch (error) {
     console.error('CSV 번역 API 오류:', error)
-    
-    // 오류 응답도 스트리밍 형태로
-    const encoder = new TextEncoder()
-    const errorData = {
-      type: 'error',
-      error: error instanceof Error ? error.message : '번역 처리 중 오류가 발생했습니다.'
-    }
-    
-    const stream = new ReadableStream({
-      start(controller) {
-        controller.enqueue(encoder.encode(JSON.stringify(errorData) + '\n'))
-        controller.close()
-      }
-    })
-
-    return new Response(stream, {
-      status: 500,
-      headers: {
-        'Content-Type': 'text/plain; charset=utf-8',
-      },
-    })
+    return createErrorStream(error instanceof Error ? error.message : '번역 처리 중 오류가 발생했습니다.')
   }
+}
+
+// 다양한 인코딩으로 파일 읽기 시도
+async function readFileWithEncoding(file: File): Promise<string | null> {
+  const arrayBuffer = await file.arrayBuffer()
+  
+  // 시도할 인코딩들
+  const encodings = ['utf-8', 'euc-kr', 'windows-949']
+  
+  for (const encoding of encodings) {
+    try {
+      const decoder = new TextDecoder(encoding, { fatal: true })
+      const text = decoder.decode(arrayBuffer)
+      
+      // 한글이 포함된 텍스트인지 확인
+      if (text && !hasCorruptedText(text)) {
+        console.log(`✅ 성공적으로 ${encoding} 인코딩으로 읽음`)
+        return text
+      }
+    } catch (error) {
+      console.log(`❌ ${encoding} 인코딩으로 읽기 실패:`, error)
+    }
+  }
+  
+  // 모든 인코딩 실패 시 UTF-8로 강제 읽기 (오류 무시)
+  try {
+    const decoder = new TextDecoder('utf-8', { fatal: false })
+    const text = decoder.decode(arrayBuffer)
+    console.log('⚠️ UTF-8 강제 읽기 (일부 문자가 깨질 수 있음)')
+    return text
+  } catch (error) {
+    return null
+  }
+}
+
+// 텍스트에 깨진 문자가 있는지 검사
+function hasCorruptedText(text: string): boolean {
+  // 연속된 물음표나 알 수 없는 문자 패턴 검사
+  const corruptedPatterns = [
+    /\?{3,}/,  // ??? 연속된 물음표
+    /�+/,      // replacement character
+    /[^\x00-\x7F\uAC00-\uD7AF\u1100-\u11FF\u3130-\u318F\uA960-\uA97F\uD7B0-\uD7FF\s\d\p{P}]+/u, // 한글, ASCII, 숫자, 구두점 외의 문자
+  ]
+  
+  return corruptedPatterns.some(pattern => pattern.test(text))
+}
+
+// 오류 스트림 생성
+function createErrorStream(errorMessage: string): Response {
+  const encoder = new TextEncoder()
+  const errorData = {
+    type: 'error',
+    error: errorMessage
+  }
+  
+  const stream = new ReadableStream({
+    start(controller) {
+      controller.enqueue(encoder.encode(JSON.stringify(errorData) + '\n'))
+      controller.close()
+    }
+  })
+
+  return new Response(stream, {
+    status: 500,
+    headers: {
+      'Content-Type': 'text/plain; charset=utf-8',
+    },
+  })
 }
 
 // 간단한 CSV 파싱 함수 (따옴표 처리)

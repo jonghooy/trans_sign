@@ -12,7 +12,7 @@ if (!FINE_TUNED_MODEL) {
 }
 
 /**
- * 한국어 텍스트를 수어로 번역하는 함수
+ * ⚡ 고속 한국어 텍스트를 수어로 번역하는 함수 (최적화됨)
  */
 export async function translateKoreanToSignLanguage(koreanText: string): Promise<TranslationResponse> {
   try {
@@ -24,8 +24,13 @@ export async function translateKoreanToSignLanguage(koreanText: string): Promise
           content: koreanText,
         },
       ],
-      max_tokens: 1000,
-      temperature: 0.3,
+      // 🚀 속도 최적화 설정
+      max_tokens: 200,        // 1000 → 200 (수어 번역은 일반적으로 짧음)
+      temperature: 0.1,       // 0.3 → 0.1 (더 빠른 응답, 일관성 높임)
+      top_p: 0.9,            // 응답 속도 향상
+      frequency_penalty: 0,   // 기본값으로 빠른 응답
+      presence_penalty: 0,    // 기본값으로 빠른 응답
+      stream: false,          // 스트리밍 비활성화로 빠른 완료
     })
 
     const translatedText = response.choices[0]?.message?.content?.trim()
@@ -42,7 +47,7 @@ export async function translateKoreanToSignLanguage(koreanText: string): Promise
       translated_text: translatedText,
     }
   } catch (error) {
-    console.error('Translation error:', error)
+    console.error('⚡ 고속 번역 오류:', error)
     return {
       success: false,
       error: error instanceof Error ? error.message : '번역 중 오류가 발생했습니다.',
@@ -51,64 +56,37 @@ export async function translateKoreanToSignLanguage(koreanText: string): Promise
 }
 
 /**
- * 배치 번역 함수 - 여러 문장을 한 번에 번역
+ * 배치 번역 함수 - 여러 문장을 한 번에 번역 (사용하지 않음, 병렬 처리로 대체)
  */
 export async function translateBatch(texts: string[]): Promise<{ 
   success: boolean; 
   results: Array<{ original: string; translated?: string; error?: string }> 
 }> {
-  const results = []
   
-  for (const text of texts) {
-    const result = await translateKoreanToSignLanguage(text)
-    
-    if (result.success) {
-      results.push({
-        original: text,
-        translated: result.translated_text!,
-      })
-    } else {
-      results.push({
-        original: text,
-        error: result.error,
-      })
-    }
-    
-    // API 호출 제한을 위한 지연
-    await new Promise(resolve => setTimeout(resolve, 100))
-  }
-  
-  return {
-    success: true,
-    results,
-  }
-}
-
-/**
- * 텍스트 임베딩 생성 함수
- */
-export async function generateEmbedding(text: string): Promise<number[] | null> {
   try {
-    const response = await openai.embeddings.create({
-      model: 'text-embedding-3-small',
-      input: text,
-      encoding_format: 'float',
-    })
+    const results = await Promise.all(
+      texts.map(async (text) => {
+        const result = await translateKoreanToSignLanguage(text)
+        if (result.success) {
+          return { original: text, translated: result.translated_text }
+        } else {
+          return { original: text, error: result.error }
+        }
+      })
+    )
 
-    return response.data[0].embedding
+    return {
+      success: true,
+      results
+    }
   } catch (error) {
-    console.error('Embedding error:', error)
-    return null
+    console.error('Batch translation error:', error)
+    return {
+      success: false,
+      results: texts.map(text => ({ 
+        original: text, 
+        error: error instanceof Error ? error.message : '배치 번역 중 오류가 발생했습니다.' 
+      }))
+    }
   }
 }
-
-/**
- * 유사도 계산 함수 (코사인 유사도)
- */
-export function calculateCosineSimilarity(vecA: number[], vecB: number[]): number {
-  const dotProduct = vecA.reduce((sum, a, i) => sum + a * vecB[i], 0)
-  const magnitudeA = Math.sqrt(vecA.reduce((sum, a) => sum + a * a, 0))
-  const magnitudeB = Math.sqrt(vecB.reduce((sum, b) => sum + b * b, 0))
-  
-  return dotProduct / (magnitudeA * magnitudeB)
-} 

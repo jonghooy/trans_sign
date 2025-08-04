@@ -1,7 +1,7 @@
 'use client'
 
 import React, { useState } from 'react'
-import { Upload, Download, Languages, FileText, Loader2, CheckCircle, XCircle, Activity } from 'lucide-react'
+import { Upload, Download, Languages, FileText, Loader2, CheckCircle, XCircle, Activity, AlertTriangle, Info } from 'lucide-react'
 
 interface TranslationResult {
   sentence_id: string
@@ -18,6 +18,7 @@ export default function Home() {
   const [progress, setProgress] = useState({ current: 0, total: 0 })
   const [error, setError] = useState<string | null>(null)
   const [currentTranslation, setCurrentTranslation] = useState<string>('')
+  const [showEncodingHelp, setShowEncodingHelp] = useState(false)
 
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -93,7 +94,13 @@ export default function Home() {
       }
 
     } catch (error) {
-      setError(error instanceof Error ? error.message : '번역 중 오류가 발생했습니다')
+      const errorMessage = error instanceof Error ? error.message : '번역 중 오류가 발생했습니다'
+      setError(errorMessage)
+      
+      // 인코딩 관련 오류인지 확인
+      if (errorMessage.includes('인코딩') || errorMessage.includes('깨져') || errorMessage.includes('UTF-8')) {
+        setShowEncodingHelp(true)
+      }
     } finally {
       setIsTranslating(false)
       setCurrentTranslation('')
@@ -116,8 +123,9 @@ export default function Home() {
       ].join(','))
     ].join('\n')
 
-    // 다운로드
-    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' })
+    // UTF-8 BOM 추가 (Excel에서 한글 깨짐 방지)
+    const BOM = '\uFEFF'
+    const blob = new Blob([BOM + csvContent], { type: 'text/csv;charset=utf-8;' })
     const link = document.createElement('a')
     const url = URL.createObjectURL(blob)
     
@@ -145,6 +153,24 @@ export default function Home() {
         <p className="text-xl text-gray-600 mb-8">
           CSV 파일을 업로드하고 OpenAI 파인튜닝된 모델로 한국어를 수어로 번역하세요
         </p>
+      </div>
+
+      {/* UTF-8 인코딩 안내 */}
+      <div className="mb-8 p-4 bg-blue-50 border border-blue-200 rounded-lg">
+        <div className="flex items-start">
+          <Info className="w-5 h-5 text-blue-500 mt-0.5 mr-2 flex-shrink-0" />
+          <div className="text-blue-700">
+            <h3 className="font-medium mb-2">�� CSV 파일 인코딩 안내</h3>
+            <p className="text-sm mb-2">
+              <strong>파일이 UTF-8로 저장되어야 합니다.</strong> 한글이 깨져서 번역되는 경우 다음 방법을 사용하세요:
+            </p>
+            <div className="text-sm space-y-1">
+              <p>• <strong>메모장:</strong> 다른 이름으로 저장 → 인코딩: UTF-8 선택</p>
+              <p>• <strong>Excel:</strong> CSV UTF-8(쉼표로 분리)로 저장</p>
+              <p>• <strong>LibreOffice:</strong> 저장 시 문자 집합: UTF-8 선택</p>
+            </div>
+          </div>
+        </div>
       </div>
 
       {/* 메인 카드 */}
@@ -186,6 +212,7 @@ export default function Home() {
             <p><strong>필수 컬럼:</strong> sentence_id, korean_text</p>
             <p><strong>선택적 컬럼:</strong> human_translation</p>
             <p><strong>결과 컬럼:</strong> ai_translation, check (빈 값으로 생성됨)</p>
+            <p className="mt-2 text-blue-600"><strong>⚠️ 중요:</strong> 파일은 반드시 UTF-8 인코딩으로 저장되어야 합니다</p>
           </div>
         </div>
 
@@ -247,9 +274,48 @@ export default function Home() {
           </button>
 
           {error && (
-            <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg flex items-center">
-              <XCircle className="w-5 h-5 text-red-500 mr-2" />
-              <span className="text-red-700">{error}</span>
+            <div className="mt-4 p-4 bg-red-50 border border-red-200 rounded-lg">
+              <div className="flex items-start">
+                <XCircle className="w-5 h-5 text-red-500 mr-2 mt-0.5 flex-shrink-0" />
+                <div className="text-red-700">
+                  <span className="font-medium">오류:</span> {error}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* 인코딩 도움말 */}
+          {showEncodingHelp && (
+            <div className="mt-4 p-4 bg-yellow-50 border border-yellow-200 rounded-lg">
+              <div className="flex items-start">
+                <AlertTriangle className="w-5 h-5 text-yellow-500 mr-2 mt-0.5 flex-shrink-0" />
+                <div className="text-yellow-700">
+                  <h4 className="font-medium mb-2">🔧 인코딩 문제 해결 방법</h4>
+                  <div className="text-sm space-y-2">
+                    <div>
+                      <strong>1. 메모장 사용:</strong>
+                      <ul className="ml-4 list-disc">
+                        <li>CSV 파일을 메모장으로 열기</li>
+                        <li>파일 → 다른 이름으로 저장</li>
+                        <li>인코딩: "UTF-8" 선택 후 저장</li>
+                      </ul>
+                    </div>
+                    <div>
+                      <strong>2. Excel 사용:</strong>
+                      <ul className="ml-4 list-disc">
+                        <li>파일 → 다른 이름으로 저장</li>
+                        <li>파일 형식: "CSV UTF-8(쉼표로 분리)" 선택</li>
+                      </ul>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => setShowEncodingHelp(false)}
+                    className="mt-2 text-yellow-600 underline text-sm"
+                  >
+                    닫기
+                  </button>
+                </div>
+              </div>
             </div>
           )}
 
@@ -279,7 +345,7 @@ export default function Home() {
             }`}
           >
             <Download className="w-5 h-5 mr-2" />
-            번역된 CSV 다운로드 (check 열 포함)
+            번역된 CSV 다운로드 (UTF-8, check 열 포함)
           </button>
           
           {translationResults && (
@@ -288,6 +354,7 @@ export default function Home() {
               <p className="font-mono bg-gray-100 p-2 rounded text-xs">
                 sentence_id, korean_text, human_translation, ai_translation, check
               </p>
+              <p className="mt-2 text-green-600">✅ 다운로드 파일은 UTF-8 BOM으로 저장되어 Excel에서도 한글이 깨지지 않습니다</p>
             </div>
           )}
         </div>
@@ -298,13 +365,14 @@ export default function Home() {
         <h3 className="text-lg font-semibold text-gray-800 mb-4">사용법</h3>
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 text-sm text-gray-600">
           <div>
-            <span className="font-medium text-blue-600">1단계:</span> sentence_id, korean_text 컬럼이 포함된 CSV 파일을 선택하세요.
+            <span className="font-medium text-blue-600">1단계:</span> sentence_id, korean_text 컬럼이 포함된 CSV 파일을 선택하세요. 
+            <span className="text-red-600 font-medium">파일은 반드시 UTF-8로 저장해야 합니다.</span>
           </div>
           <div>
             <span className="font-medium text-green-600">2단계:</span> 번역 시작 버튼을 클릭하여 OpenAI 모델로 번역하세요. 실시간 진행률을 확인할 수 있습니다.
           </div>
           <div>
-            <span className="font-medium text-purple-600">3단계:</span> ai_translation과 check 컬럼이 추가된 CSV 파일을 다운로드하세요.
+            <span className="font-medium text-purple-600">3단계:</span> ai_translation과 check 컬럼이 추가된 CSV 파일을 다운로드하세요. 결과는 UTF-8로 저장됩니다.
           </div>
         </div>
       </div>
