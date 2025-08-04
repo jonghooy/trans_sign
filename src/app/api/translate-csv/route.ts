@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { translateKoreanToSignLanguage } from '@/lib/openai'
+import { translateKoreanToSignLanguage, translateKoreanToSignLanguageRetry } from '@/lib/openai'
 
 interface CSVRow {
   sentence_id: string
@@ -54,18 +54,27 @@ export async function POST(request: NextRequest) {
     const headers = lines[0].split(',').map(h => h.trim().replace(/"/g, ''))
     console.log('CSV 헤더:', headers)
 
-    // 필수 헤더 확인
-    const requiredHeaders = ['sentence_id', 'korean_text']
-    const missingHeaders = requiredHeaders.filter(h => !headers.includes(h))
+    // 필수 헤더 확인 (여러 가능한 컬럼명 지원)
+    const sentenceIdColumns = ['sentence_id', '문장번호']
+    const koreanTextColumns = ['korean_text', '정제 문장']
+    const humanTranslationColumns = ['human_translation', '수어번역']
     
-    if (missingHeaders.length > 0) {
-      return createErrorStream(`필수 컬럼이 없습니다: ${missingHeaders.join(', ')}`)
+    // sentence_id 또는 문장번호 찾기
+    const sentenceIdIndex = headers.findIndex(h => sentenceIdColumns.includes(h))
+    if (sentenceIdIndex === -1) {
+      return createErrorStream(`필수 컬럼이 없습니다: ${sentenceIdColumns.join(' 또는 ')}`)
     }
-
-    // 인덱스 찾기
-    const sentenceIdIndex = headers.indexOf('sentence_id')
-    const koreanTextIndex = headers.indexOf('korean_text')
-    const humanTranslationIndex = headers.indexOf('human_translation')
+    
+    // korean_text 또는 정제 문장 찾기  
+    const koreanTextIndex = headers.findIndex(h => koreanTextColumns.includes(h))
+    if (koreanTextIndex === -1) {
+      return createErrorStream(`필수 컬럼이 없습니다: ${koreanTextColumns.join(' 또는 ')}`)
+    }
+    
+    // human_translation 또는 수어번역 찾기 (선택적)
+    const humanTranslationIndex = headers.findIndex(h => humanTranslationColumns.includes(h))
+    
+    console.log(`✅ 컬럼 매핑: ID=${headers[sentenceIdIndex]}, 텍스트=${headers[koreanTextIndex]}, 수어번역=${humanTranslationIndex >= 0 ? headers[humanTranslationIndex] : '없음'}`)
 
     // 데이터 행 파싱
     const dataRows: CSVRow[] = []
@@ -108,61 +117,218 @@ export async function POST(request: NextRequest) {
     const encoder = new TextEncoder()
     const stream = new ReadableStream({
       async start(controller) {
-        // 번역 수행
-        const results: TranslationResult[] = []
+        // 🚀 고속 병렬 번역 수행
+        const results: TranslationResult[] = new Array(dataRows.length)
         const total = dataRows.length
+        const BATCH_SIZE = 10 // 동시에 처리할 최대 개수 (5→10으로 증가)
+        const BATCH_DELAY = 100 // 배치 간 딜레이 (ms) (200→100으로 감소)
         
-        for (let i = 0; i < dataRows.length; i++) {
-          const row = dataRows[i]
+        let completed = 0
+        const failedQualityCheck: { index: number, row: CSVRow }[] = [] // 품질 검증 실패한 문장들
+        
+        // 배치별로 병렬 처리
+        for (let batchStart = 0; batchStart < dataRows.length; batchStart += BATCH_SIZE) {
+          const batchEnd = Math.min(batchStart + BATCH_SIZE, dataRows.length)
+          const batch = dataRows.slice(batchStart, batchEnd)
           
-          try {
-            // 진행 상황 전송
+          console.log(`🔥 배치 ${Math.floor(batchStart / BATCH_SIZE) + 1} 시작: ${batchStart + 1}-${batchEnd}번 문장 (${batch.length}개)`)
+          
+          // 현재 배치를 병렬로 처리
+          const batchPromises = batch.map(async (row, localIndex) => {
+            const globalIndex = batchStart + localIndex
+            
+            try {
+              const translationResponse = await translateKoreanToSignLanguage(row.korean_text)
+              
+              let aiTranslation: string
+              let isQualityCheckFailed = false
+              
+              if (!translationResponse.success) {
+                aiTranslation = `[번역 실패: ${translationResponse.error}]`
+              } else if (!translationResponse.translated_text || translationResponse.translated_text.trim() === '') {
+                aiTranslation = '' // 품질 검증 실패로 빈 문자열인 경우 그대로 빈 값으로 출력
+                isQualityCheckFailed = true
+              } else {
+                aiTranslation = translationResponse.translated_text
+              }
+              
+              const result: TranslationResult = {
+                ...row,
+                ai_translation: aiTranslation,
+                check: '' // 빈 값으로 초기화
+              }
+              
+              // 품질 검증 실패한 경우 재시도 목록에 추가
+              if (isQualityCheckFailed) {
+                failedQualityCheck.push({ index: globalIndex, row })
+              }
+              
+              return { index: globalIndex, result }
+              
+            } catch (error) {
+              console.error(`번역 오류 (${row.sentence_id}):`, error)
+              const result: TranslationResult = {
+                ...row,
+                ai_translation: `[번역 실패: ${error instanceof Error ? error.message : '알 수 없는 오류'}]`,
+                check: ''
+              }
+              return { index: globalIndex, result }
+            }
+          })
+          
+          // 배치 내 모든 번역 완료 대기
+          const batchResults = await Promise.all(batchPromises)
+          
+          // 결과를 순서대로 저장
+          batchResults.forEach(({ index, result }) => {
+            results[index] = result
+            completed++
+            
+            // 실시간 진행 상황 전송
             const progressData = {
               type: 'progress',
-              current: i + 1,
+              current: completed,
               total: total,
-              currentText: row.korean_text
+              currentText: result.korean_text.substring(0, 30) + '...'
             }
             controller.enqueue(encoder.encode(JSON.stringify(progressData) + '\n'))
-            
-            console.log(`⚡ 고속 번역 중 (${i + 1}/${total}): ${row.korean_text.substring(0, 50)}...`)
-            
-            const translationResponse = await translateKoreanToSignLanguage(row.korean_text)
-            
-            const result: TranslationResult = {
-              ...row,
-              ai_translation: translationResponse.success 
-                ? translationResponse.translated_text || '[번역 실패: 결과 없음]'
-                : `[번역 실패: ${translationResponse.error}]`,
-              check: '' // 빈 값으로 초기화
-            }
-            
-            results.push(result)
-            
-            // API 제한을 위한 지연
-            if (i < dataRows.length - 1) {
-              await new Promise(resolve => setTimeout(resolve, 1000))
-            }
-            
-          } catch (error) {
-            console.error(`번역 오류 (${row.sentence_id}):`, error)
-            const result: TranslationResult = {
-              ...row,
-              ai_translation: `[번역 실패: ${error instanceof Error ? error.message : '알 수 없는 오류'}]`,
-              check: ''
-            }
-            results.push(result)
+          })
+          
+          console.log(`✅ 배치 완료: ${completed}/${total} (${Math.round(completed / total * 100)}%)`)
+          
+          // 배치 간 짧은 딜레이 (API 제한 고려)
+          if (batchEnd < dataRows.length) {
+            await new Promise(resolve => setTimeout(resolve, BATCH_DELAY))
           }
         }
 
+        // 🔄 품질 검증 실패한 문장들 다차 재시도 (2차, 3차)
+        if (failedQualityCheck.length > 0) {
+          const RETRY_BATCH_SIZE = 3
+          const RETRY_BATCH_DELAY = 200 // 재시도는 더 신중하게
+          
+          // 재시도 파라미터 설정 (단계별로 더 보수적)
+          const retrySettings: Array<{
+            attempt: number
+            temperature: number
+            top_p: number
+            max_tokens: number
+            description: string
+          }> = [
+            { 
+              attempt: 2, 
+              temperature: 0.1, 
+              top_p: 0.8, 
+              max_tokens: 200,
+              description: "2차 시도 (보수적)" 
+            },
+            { 
+              attempt: 3, 
+              temperature: 0.005, 
+              top_p: 0.6, 
+              max_tokens: 250,
+              description: "3차 시도 (극보수적 + 입력패턴 변화)" 
+            }
+          ]
+          
+          let currentFailedList = [...failedQualityCheck] // 현재 실패 목록
+          
+          for (const { attempt, temperature, top_p, max_tokens, description } of retrySettings) {
+            if (currentFailedList.length === 0) break // 더 이상 실패한 것이 없으면 중단
+            
+            console.log(`🔄 ${description}: ${currentFailedList.length}개 문장`)
+            
+            let retryCompleted = 0
+            const nextFailedList: { index: number, row: CSVRow }[] = []
+            
+            for (let i = 0; i < currentFailedList.length; i += RETRY_BATCH_SIZE) {
+              const retryBatch = currentFailedList.slice(i, i + RETRY_BATCH_SIZE)
+              
+              console.log(`🔄 ${attempt}차 재시도 배치 ${Math.floor(i / RETRY_BATCH_SIZE) + 1}: ${retryBatch.length}개 문장 (temp=${temperature}, top_p=${top_p}, max_tokens=${max_tokens}${attempt === 3 ? ', 입력패턴변화' : ''})`)
+              
+              const retryPromises = retryBatch.map(async ({ index, row }) => {
+                try {
+                  const retryResponse = await translateKoreanToSignLanguageRetry(
+                    row.korean_text,
+                    temperature,
+                    top_p,
+                    max_tokens,
+                    attempt === 3 // 3차 시도일 때만 입력 패턴 변화
+                  )
+                  
+                  if (retryResponse.success && retryResponse.translated_text && retryResponse.translated_text.trim() !== '') {
+                    // 재시도 성공
+                    const updatedResult: TranslationResult = {
+                      ...row,
+                      ai_translation: retryResponse.translated_text,
+                      check: ''
+                    }
+                    results[index] = updatedResult
+                    console.log(`✅ ${attempt}차 재시도 성공 (${row.sentence_id}): ${retryResponse.translated_text.substring(0, 50)}...`)
+                    return { index, row, success: true }
+                  } else {
+                    console.log(`❌ ${attempt}차 재시도도 실패 (${row.sentence_id})`)
+                    return { index, row, success: false }
+                  }
+                } catch (error) {
+                  console.error(`${attempt}차 재시도 오류 (${row.sentence_id}):`, error)
+                  return { index, row, success: false }
+                }
+              })
+              
+              const retryResults = await Promise.all(retryPromises)
+              retryCompleted += retryResults.length
+              
+              // 실패한 것들은 다음 차수 재시도 목록에 추가
+              retryResults.forEach(({ index, row, success }) => {
+                if (!success) {
+                  nextFailedList.push({ index, row })
+                }
+              })
+              
+              // 📊 재시도 진행 상황 전송 (단계별 정보 포함)
+              const retryProgressData = {
+                type: 'progress',
+                current: total,
+                total: total,
+                currentText: `${attempt}차 시도 진행 중... (${retryCompleted}/${currentFailedList.length})`,
+                retryStage: {
+                  attempt: attempt,
+                  currentCompleted: retryCompleted,
+                  totalForThisStage: currentFailedList.length,
+                  isRetry: true
+                }
+              }
+              controller.enqueue(encoder.encode(JSON.stringify(retryProgressData) + '\n'))
+              
+              // 재시도 배치 간 딜레이
+              if (i + RETRY_BATCH_SIZE < currentFailedList.length) {
+                await new Promise(resolve => setTimeout(resolve, RETRY_BATCH_DELAY))
+              }
+            }
+            
+            console.log(`🎯 ${attempt}차 재시도 완료: ${currentFailedList.length - nextFailedList.length}개 성공, ${nextFailedList.length}개 여전히 실패`)
+            currentFailedList = nextFailedList // 다음 차수를 위해 실패 목록 업데이트
+          }
+          
+          console.log(`🏁 모든 재시도 완료`)
+        }
+
         // 완료 데이터 전송
+        const successfulCount = results.filter(r => !r.ai_translation.startsWith('[번역 실패') && r.ai_translation.trim() !== '').length
+        const failedCount = results.filter(r => r.ai_translation.startsWith('[번역 실패')).length
+        const qualityFailedCount = results.filter(r => r.ai_translation.trim() === '').length
+        
         const completeData = {
           type: 'complete',
           results: results,
           statistics: {
             total: results.length,
-            successful: results.filter(r => !r.ai_translation.startsWith('[번역 실패')).length,
-            failed: results.filter(r => r.ai_translation.startsWith('[번역 실패')).length
+            successful: successfulCount,
+            failed: failedCount,
+            qualityCheckFailed: qualityFailedCount,
+            retryAttempted: failedQualityCheck.length,
+            retrySuccessful: failedQualityCheck.length - qualityFailedCount
           }
         }
         controller.enqueue(encoder.encode(JSON.stringify(completeData) + '\n'))
