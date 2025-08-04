@@ -90,7 +90,7 @@ export default function Home() {
                 } else if (data.type === 'error') {
                   throw new Error(data.error)
                 }
-              } catch (e) {
+              } catch {
                 console.warn('JSON 파싱 오류:', line)
               }
             }
@@ -205,7 +205,7 @@ export default function Home() {
                 } else if (data.type === 'error') {
                   throw new Error(data.error)
                 }
-              } catch (e) {
+              } catch {
                 console.warn('JSON 파싱 오류:', line)
               }
             }
@@ -226,8 +226,7 @@ export default function Home() {
   const handleDownload = () => {
     if (!translationResults) return
 
-    // CSV 생성 (check 열 포함) - 원본 컬럼명과 일치하도록 동적으로 생성
-    const firstResult = translationResults[0]
+    // CSV 생성 (check 열 포함) - 통일된 형태로 출력
     const headers = [
       'sentence_id', // 원본이 문장번호더라도 통일된 형태로 출력
       'korean_text', // 원본이 정제 문장이더라도 통일된 형태로 출력  

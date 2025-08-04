@@ -380,7 +380,7 @@ async function readFileWithEncoding(file: File): Promise<string | null> {
     const text = decoder.decode(arrayBuffer)
     console.log('⚠️ UTF-8 강제 읽기 (일부 문자가 깨질 수 있음)')
     return text
-  } catch (error) {
+  } catch {
     return null
   }
 }
