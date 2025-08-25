@@ -104,6 +104,8 @@ export async function translateKoreanToSignLanguage(koreanText: string): Promise
       return {
         success: true,
         translated_text: '', // 품질 검증 실패시 빈 문자열 반환
+        raw_translation: translatedText, // 원본 번역 결과는 보존
+        quality_check_failed: true
       }
     }
 
@@ -169,6 +171,8 @@ export async function translateKoreanToSignLanguageRetry(
       return {
         success: true,
         translated_text: '', // 재시도에서도 품질 검증 실패시 빈 문자열 반환
+        raw_translation: translatedText, // 원본 번역 결과는 보존
+        quality_check_failed: true
       }
     }
 

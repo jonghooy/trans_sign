@@ -1,8 +1,10 @@
 {
-  "fine_tuned_model_id": "ft:gpt-4.1-2025-04-14:personal:sign-korean-translator:Box9xvlH",
-  "job_id": "ftjob-l8icJDOiEK2K2RHXrKgLu6z9",
-  "base_model": "gpt-4.1-2025-04-14",
+  "fine_tuned_model_id": "ft:gpt-4.1-2025-04-14:personal::C8SL0o5t",
+  "job_id": "ftjob-Y9e7DMWgAwREjjHH9DFDyzUw",
+  "base_model": "gpt-4o-mini-2024-07-18",
   "status": "succeeded",
-  "created_at": 1751414787,
-  "finished_at": 1751483506
+  "created_at": 1756132703,
+  "training_data": "sign_to_korean_sample_10k.jsonl (10,000개)",
+  "version": "2.0",
+  "improvements": "1만 문장으로 {2024}년 등 엉터리 번역 현상 방지 (epoch=1)"
 }

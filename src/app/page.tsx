@@ -1,7 +1,7 @@
 'use client'
 
-import React, { useState } from 'react'
-import { Upload, Download, Languages, FileText, Loader2, CheckCircle, XCircle, Activity } from 'lucide-react'
+import React, { useState, useEffect } from 'react'
+import { Upload, Download, Languages, FileText, Loader2, CheckCircle, XCircle, Activity, Cpu } from 'lucide-react'
 
 interface TranslationResult {
   sentence_id: string
@@ -9,12 +9,26 @@ interface TranslationResult {
   human_translation?: string
   ai_translation: string
   check: string
+  // 각 재시도 단계별 결과 추적
+  attempt_1_result?: string  // 1차 시도 결과 (성공/실패 무관)
+  attempt_2_result?: string  // 2차 재시도 결과 (있는 경우)
+  attempt_3_result?: string  // 3차 재시도 결과 (있는 경우)
+  final_status?: 'success_1st' | 'success_2nd' | 'success_3rd' | 'failed_all'  // 최종 상태
+}
+
+interface ModelInfo {
+  success: boolean
+  model_id: string
+  model_type: string
+  is_fine_tuned: boolean
+  display_name: string
 }
 
 export default function Home() {
   const [selectedFile, setSelectedFile] = useState<File | null>(null)
   const [isTranslating, setIsTranslating] = useState(false)
   const [translationResults, setTranslationResults] = useState<TranslationResult[] | null>(null)
+  const [modelInfo, setModelInfo] = useState<ModelInfo | null>(null)
   const [progress, setProgress] = useState({ current: 0, total: 0 })
   const [error, setError] = useState<string | null>(null)
   const [currentTranslation, setCurrentTranslation] = useState<string>('')
@@ -25,6 +39,24 @@ export default function Home() {
     totalForThisStage: number
     isRetry: boolean
   } | null>(null)
+
+  // 모델 정보 가져오기
+  const fetchModelInfo = async () => {
+    try {
+      const response = await fetch('/api/model-info')
+      const data = await response.json()
+      if (data.success) {
+        setModelInfo(data)
+      }
+    } catch (error) {
+      console.error('모델 정보 가져오기 실패:', error)
+    }
+  }
+
+  // 컴포넌트 마운트 시 모델 정보 가져오기
+  useEffect(() => {
+    fetchModelInfo()
+  }, [])
 
   const handleFileSelect = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0]
@@ -260,6 +292,103 @@ export default function Home() {
     document.body.removeChild(link)
   }
 
+  const handleDownloadFailed = () => {
+    if (!translationResults) return
+
+    // 1차, 2차, 3차 중 한 번이라도 시도한 문장들 필터링 (재시도 이력이 있는 문장들)
+    const resultsWithRetryHistory = translationResults.filter(r => 
+      r.attempt_1_result ||  // 1차 결과가 있거나
+      r.attempt_2_result ||  // 2차 결과가 있거나  
+      r.attempt_3_result ||  // 3차 결과가 있거나
+      r.ai_translation.trim() === '' ||  // 최종 실패거나
+      r.ai_translation.startsWith('[번역 실패') ||  // API 오류거나
+      r.ai_translation.startsWith('[품질검증실패]') ||  // 품질검증 실패거나
+      r.ai_translation.includes('차재시도실패]')  // 재시도 실패
+    )
+
+    if (resultsWithRetryHistory.length === 0) {
+      alert('재시도 이력이 있는 문장이 없습니다.')
+      return
+    }
+
+    // CSV 생성 (모든 재시도 결과 포함)
+    const headers = [
+      'sentence_id',
+      'korean_text',
+      'human_translation',
+      'final_result',
+      'final_status',
+      'attempt_1_result',
+      'attempt_2_result',
+      'attempt_3_result',
+      'analysis_notes'
+    ]
+    
+    const csvContent = [
+      headers.join(','),
+      ...resultsWithRetryHistory.map(row => {
+        // 재시도 이력 분석
+        let analysisNotes = ''
+        const finalStatus = row.final_status || 'unknown'
+        
+        // 각 단계별 시도 여부 확인
+        const hasAttempt1 = !!row.attempt_1_result
+        const hasAttempt2 = !!row.attempt_2_result  
+        const hasAttempt3 = !!row.attempt_3_result
+        
+        if (finalStatus === 'success_1st') {
+          if (hasAttempt1) {
+            analysisNotes = '1차 시도에서 성공 (재시도 없음)'
+          } else {
+            analysisNotes = '1차 시도에서 성공'
+          }
+        } else if (finalStatus === 'success_2nd') {
+          analysisNotes = `1차 실패 → 2차 성공${hasAttempt1 ? ' (1차 결과 분석 가능)' : ''}`
+        } else if (finalStatus === 'success_3rd') {
+          analysisNotes = `1,2차 실패 → 3차 성공${hasAttempt1 && hasAttempt2 ? ' (1,2차 결과 분석 가능)' : ''}`
+        } else if (finalStatus === 'failed_all') {
+          if (hasAttempt1 && hasAttempt2 && hasAttempt3) {
+            analysisNotes = '1,2,3차 모든 시도 실패 (전체 과정 분석 가능)'
+          } else if (hasAttempt1 && hasAttempt2) {
+            analysisNotes = '1,2차 시도 실패, 3차 미시도'
+          } else if (hasAttempt1) {
+            analysisNotes = '1차 시도 실패, 재시도 미진행'
+          } else {
+            analysisNotes = 'API 오류로 번역 불가'
+          }
+        } else {
+          analysisNotes = `상태: ${finalStatus}, 재시도 이력 있음`
+        }
+        
+        return [
+          row.sentence_id,
+          `"${row.korean_text.replace(/"/g, '""')}"`,
+          `"${(row.human_translation || '').replace(/"/g, '""')}"`,
+          `"${(row.ai_translation || '').replace(/"/g, '""')}"`,
+          `"${finalStatus}"`,
+          `"${(row.attempt_1_result || '').replace(/"/g, '""')}"`,
+          `"${(row.attempt_2_result || '').replace(/"/g, '""')}"`,
+          `"${(row.attempt_3_result || '').replace(/"/g, '""')}"`,
+          `"${analysisNotes.replace(/"/g, '""')}"`
+        ].join(',')
+      })
+    ].join('\n')
+
+    // UTF-8 BOM 추가 (Excel에서 한글 깨짐 방지)
+    const BOM = '\uFEFF'
+    const blob = new Blob([BOM + csvContent], { type: 'text/csv;charset=utf-8;' })
+    const link = document.createElement('a')
+    const url = URL.createObjectURL(blob)
+    
+    link.setAttribute('href', url)
+    link.setAttribute('download', `${selectedFile?.name.replace('.csv', '')}_all_attempts_analysis.csv`)
+    link.style.visibility = 'hidden'
+    
+    document.body.appendChild(link)
+    link.click()
+    document.body.removeChild(link)
+  }
+
   const progressPercentage = progress.total > 0 ? (progress.current / progress.total) * 100 : 0
 
   return (
@@ -275,6 +404,35 @@ export default function Home() {
         <p className="text-xl text-gray-600 mb-8">
           CSV 파일을 업로드하고 OpenAI 파인튜닝된 모델로 한국어를 수어로 번역하세요
         </p>
+        
+        {/* 모델 정보 */}
+        {modelInfo && (
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 mb-8 max-w-2xl mx-auto">
+            <div className="flex items-center justify-center mb-2">
+              <Cpu className="w-5 h-5 text-blue-600 mr-2" />
+              <span className="text-sm font-medium text-blue-800">현재 사용 모델</span>
+            </div>
+            <div className="text-center">
+              <div className="text-lg font-semibold text-blue-900 mb-1">
+                {modelInfo.display_name}
+              </div>
+              <div className="text-sm text-blue-700">
+                {modelInfo.is_fine_tuned ? (
+                  <span className="inline-flex items-center">
+                    <span className="w-2 h-2 bg-green-500 rounded-full mr-2"></span>
+                    파인튜닝 모델 (ID: {modelInfo.model_id.slice(-10)}...)
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center">
+                    <span className="w-2 h-2 bg-orange-500 rounded-full mr-2"></span>
+                    베이스 모델 ({modelInfo.model_type})
+                  </span>
+                )}
+              </div>
+
+            </div>
+          </div>
+        )}
       </div>
 
       {/* 메인 카드 */}
@@ -457,43 +615,82 @@ export default function Home() {
             </div>
           )}
 
-          {/* 재시도 버튼 */}
-          {translationResults && translationResults.filter(r => r.ai_translation.trim() === '').length > 0 && (
+          {/* 재시도 버튼 및 분석 다운로드 */}
+          {translationResults && (
+            // 재시도 이력이 있는 문장이나 실패한 문장이 있으면 섹션 표시
+            translationResults.filter(r => 
+              r.attempt_1_result || r.attempt_2_result || r.attempt_3_result ||
+              r.ai_translation.trim() === '' || 
+              r.ai_translation.startsWith('[번역 실패') ||
+              r.ai_translation.startsWith('[품질검증실패]') ||
+              r.ai_translation.includes('차재시도실패]')
+            ).length > 0
+          ) && (
             <div className="mt-4 p-4 bg-orange-50 border border-orange-200 rounded-lg">
               <div className="flex items-center justify-between mb-3">
                 <div>
                   <h4 className="font-medium text-orange-800">
-                    🔄 추가 재시도 가능
+                    🔍 재시도 이력 및 분석
                   </h4>
                   <p className="text-sm text-orange-600 mt-1">
-                    {translationResults.filter(r => r.ai_translation.trim() === '').length}개 문장이 3차 시도 후에도 실패했습니다. 
-                    다시 1~3차 시도를 수행하시겠습니까?
+                    {translationResults.filter(r => 
+                      r.attempt_1_result || r.attempt_2_result || r.attempt_3_result
+                    ).length}개 문장에서 재시도가 수행되었습니다.
+                    {translationResults.filter(r => r.ai_translation.trim() === '').length > 0 && 
+                      ` 그 중 ${translationResults.filter(r => r.ai_translation.trim() === '').length}개는 여전히 실패 상태입니다.`
+                    }
                   </p>
                 </div>
               </div>
+              
+              {/* 재시도 버튼 (실패한 문장이 있을 때만) */}
+              {translationResults.filter(r => r.ai_translation.trim() === '').length > 0 && (
+                <button
+                  onClick={handleRetryFailed}
+                  disabled={isTranslating || isRetrying}
+                  className={`w-full flex items-center justify-center px-4 py-2 rounded-lg font-medium transition-colors mb-3 ${
+                    isTranslating || isRetrying
+                      ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
+                      : 'bg-orange-500 text-white hover:bg-orange-600'
+                  }`}
+                >
+                  {isRetrying ? (
+                    <>
+                      <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                      {retryStage?.isRetry ? 
+                        `${retryStage.attempt}차 시도 중... (${retryStage.currentCompleted}/${retryStage.totalForThisStage})` :
+                        '실패 문장 재시도 중...'
+                      }
+                    </>
+                  ) : (
+                    <>
+                      <Languages className="w-4 h-4 mr-2" />
+                      실패한 {translationResults.filter(r => r.ai_translation.trim() === '').length}개 문장 재시도
+                    </>
+                  )}
+                </button>
+              )}
+              
+              {/* 재시도 이력 분석 다운로드 버튼 */}
               <button
-                onClick={handleRetryFailed}
+                onClick={handleDownloadFailed}
                 disabled={isTranslating || isRetrying}
                 className={`w-full flex items-center justify-center px-4 py-2 rounded-lg font-medium transition-colors ${
                   isTranslating || isRetrying
                     ? 'bg-gray-300 text-gray-500 cursor-not-allowed'
-                    : 'bg-orange-500 text-white hover:bg-orange-600'
+                    : 'bg-red-500 text-white hover:bg-red-600'
                 }`}
               >
-                {isRetrying ? (
-                  <>
-                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                    {retryStage?.isRetry ? 
-                      `${retryStage.attempt}차 시도 중... (${retryStage.currentCompleted}/${retryStage.totalForThisStage})` :
-                      '실패 문장 재시도 중...'
-                    }
-                  </>
-                ) : (
-                  <>
-                    <Languages className="w-4 h-4 mr-2" />
-                    실패한 {translationResults.filter(r => r.ai_translation.trim() === '').length}개 문장 재시도
-                  </>
-                )}
+                <Download className="w-4 h-4 mr-2" />
+                재시도 이력 분석 다운로드 ({translationResults.filter(r => 
+                  r.attempt_1_result ||  // 1차 결과가 있거나
+                  r.attempt_2_result ||  // 2차 결과가 있거나  
+                  r.attempt_3_result ||  // 3차 결과가 있거나
+                  r.ai_translation.trim() === '' ||  // 최종 실패거나
+                  r.ai_translation.startsWith('[번역 실패') ||  // API 오류거나
+                  r.ai_translation.startsWith('[품질검증실패]') ||  // 품질검증 실패거나
+                  r.ai_translation.includes('차재시도실패]')  // 재시도 실패
+                ).length}개)
               </button>
             </div>
           )}
@@ -533,7 +730,7 @@ export default function Home() {
       {/* 작업 흐름 설명 */}
       <div className="mt-12 bg-gray-50 rounded-lg p-6">
         <h3 className="text-lg font-semibold text-gray-800 mb-4">사용법</h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 text-sm text-gray-600">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 text-sm text-gray-600">
           <div>
             <span className="font-medium text-blue-600">1단계:</span> sentence_id(문장번호), korean_text(정제 문장) 컬럼이 포함된 CSV 파일을 선택하세요.
           </div>
@@ -542,6 +739,9 @@ export default function Home() {
           </div>
           <div>
             <span className="font-medium text-orange-600">재시도:</span> 3차 시도 후에도 실패한 문장이 있으면 재시도 버튼이 나타납니다. 선택적으로 추가 시도 가능합니다.
+          </div>
+          <div>
+            <span className="font-medium text-red-600">이력분석:</span> 재시도가 수행된 문장들의 1차, 2차, 3차 결과를 모두 포함한 상세 분석 CSV를 다운로드할 수 있습니다. 3차 시도 후 모든 문장이 성공해도 1,2차 실패 결과 분석이 가능합니다.
           </div>
           <div>
             <span className="font-medium text-purple-600">3단계:</span> ai_translation과 check 컬럼이 추가된 CSV 파일을 다운로드하세요.

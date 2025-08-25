@@ -4,6 +4,8 @@ export interface TranslationResponse {
   success: boolean
   translated_text?: string
   error?: string
+  raw_translation?: string  // 품질검증 실패 시에도 원본 번역 결과 보존
+  quality_check_failed?: boolean  // 품질검증 실패 여부
 }
 
 export interface CSVRow {

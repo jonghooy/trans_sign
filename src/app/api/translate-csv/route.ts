@@ -10,6 +10,11 @@ interface CSVRow {
 interface TranslationResult extends CSVRow {
   ai_translation: string
   check: string
+  // 각 재시도 단계별 결과 추적
+  attempt_1_result?: string  // 1차 시도 결과 (성공/실패 무관)
+  attempt_2_result?: string  // 2차 재시도 결과 (있는 경우)
+  attempt_3_result?: string  // 3차 재시도 결과 (있는 경우)
+  final_status?: 'success_1st' | 'success_2nd' | 'success_3rd' | 'failed_all'  // 최종 상태
 }
 
 export async function POST(request: NextRequest) {
@@ -143,19 +148,32 @@ export async function POST(request: NextRequest) {
               let aiTranslation: string
               let isQualityCheckFailed = false
               
+              // 1차 시도 결과를 저장 (성공/실패 무관하게 실제 번역 결과 저장)
+              let attempt1Result = ''
               if (!translationResponse.success) {
                 aiTranslation = `[번역 실패: ${translationResponse.error}]`
+                attempt1Result = aiTranslation
               } else if (!translationResponse.translated_text || translationResponse.translated_text.trim() === '') {
-                aiTranslation = '' // 품질 검증 실패로 빈 문자열인 경우 그대로 빈 값으로 출력
+                // 품질 검증 실패 시 실제 번역 결과가 있으면 표시
+                if (translationResponse.raw_translation) {
+                  aiTranslation = `[품질검증실패] ${translationResponse.raw_translation}`
+                  attempt1Result = translationResponse.raw_translation  // 실제 번역 결과 저장
+                } else {
+                  aiTranslation = '[품질검증실패: 실제 AI 번역 결과 확인 불가]'
+                  attempt1Result = aiTranslation
+                }
                 isQualityCheckFailed = true
               } else {
                 aiTranslation = translationResponse.translated_text
+                attempt1Result = translationResponse.translated_text
               }
               
               const result: TranslationResult = {
                 ...row,
                 ai_translation: aiTranslation,
-                check: '' // 빈 값으로 초기화
+                check: '', // 빈 값으로 초기화
+                attempt_1_result: attempt1Result,
+                final_status: isQualityCheckFailed || !translationResponse.success ? undefined : 'success_1st'
               }
               
               // 품질 검증 실패한 경우 재시도 목록에 추가
@@ -256,17 +274,51 @@ export async function POST(request: NextRequest) {
                     attempt === 3 // 3차 시도일 때만 입력 패턴 변화
                   )
                   
+                  // 재시도 결과 저장 (성공/실패 무관)
+                  let attemptResult = ''
+                  let wasSuccessful = false
+                  
+                  if (!retryResponse.success) {
+                    attemptResult = `[번역 실패: ${retryResponse.error}]`
+                  } else if (retryResponse.raw_translation) {
+                    attemptResult = retryResponse.raw_translation
+                  } else if (retryResponse.translated_text) {
+                    attemptResult = retryResponse.translated_text
+                  }
+                  
                   if (retryResponse.success && retryResponse.translated_text && retryResponse.translated_text.trim() !== '') {
                     // 재시도 성공
+                    wasSuccessful = true
                     const updatedResult: TranslationResult = {
-                      ...row,
+                      ...results[index],  // 기존 결과 유지
                       ai_translation: retryResponse.translated_text,
-                      check: ''
+                      final_status: attempt === 2 ? 'success_2nd' : 'success_3rd'
                     }
+                    
+                    // 동적으로 재시도 결과 할당
+                    if (attempt === 2) {
+                      updatedResult.attempt_2_result = attemptResult
+                    } else if (attempt === 3) {
+                      updatedResult.attempt_3_result = attemptResult
+                    }
+                    
                     results[index] = updatedResult
                     console.log(`✅ ${attempt}차 재시도 성공 (${row.sentence_id}): ${retryResponse.translated_text.substring(0, 50)}...`)
                     return { index, row, success: true }
                   } else {
+                    // 재시도 실패 - 결과 저장 후 계속 진행
+                    const failedResult: TranslationResult = {
+                      ...results[index]  // 기존 결과 유지
+                    }
+                    
+                    // 동적으로 재시도 결과 할당
+                    if (attempt === 2) {
+                      failedResult.attempt_2_result = attemptResult
+                    } else if (attempt === 3) {
+                      failedResult.attempt_3_result = attemptResult
+                    }
+                    
+                    results[index] = failedResult
                     console.log(`❌ ${attempt}차 재시도도 실패 (${row.sentence_id})`)
                     return { index, row, success: false }
                   }
@@ -313,6 +365,19 @@ export async function POST(request: NextRequest) {
           
           console.log(`🏁 모든 재시도 완료`)
         }
+
+        // 최종 상태 설정 (아직 설정되지 않은 결과들)
+        results.forEach(result => {
+          if (!result.final_status) {
+            // ai_translation이 비어있거나 실패 메시지면 failed_all
+            if (!result.ai_translation || 
+                result.ai_translation.trim() === '' || 
+                result.ai_translation.startsWith('[번역 실패') ||
+                result.ai_translation.startsWith('[품질검증실패]')) {
+              result.final_status = 'failed_all'
+            }
+          }
+        })
 
         // 완료 데이터 전송
         const successfulCount = results.filter(r => !r.ai_translation.startsWith('[번역 실패') && r.ai_translation.trim() !== '').length
