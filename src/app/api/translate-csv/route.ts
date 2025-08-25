@@ -276,7 +276,6 @@ export async function POST(request: NextRequest) {
                   
                   // 재시도 결과 저장 (성공/실패 무관)
                   let attemptResult = ''
-                  let wasSuccessful = false
                   
                   if (!retryResponse.success) {
                     attemptResult = `[번역 실패: ${retryResponse.error}]`
@@ -288,7 +287,6 @@ export async function POST(request: NextRequest) {
                   
                   if (retryResponse.success && retryResponse.translated_text && retryResponse.translated_text.trim() !== '') {
                     // 재시도 성공
-                    wasSuccessful = true
                     const updatedResult: TranslationResult = {
                       ...results[index],  // 기존 결과 유지
                       ai_translation: retryResponse.translated_text,

@@ -14,13 +14,12 @@ export async function GET() {
       }, { status: 500 })
     }
 
-    // data/model_info.json 파일에서 추가 정보 읽기
-    let modelInfo = null
+    // data/model_info.json 파일에서 추가 정보 읽기 (현재는 사용하지 않음)
     try {
       const modelInfoPath = path.join(process.cwd(), 'data', 'model_info.json')
       if (fs.existsSync(modelInfoPath)) {
         const modelInfoContent = fs.readFileSync(modelInfoPath, 'utf-8')
-        modelInfo = JSON.parse(modelInfoContent)
+        JSON.parse(modelInfoContent) // 파일 존재 확인용
       }
     } catch (error) {
       console.log('model_info.json 파일을 읽을 수 없습니다:', error)
