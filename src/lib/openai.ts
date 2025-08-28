@@ -62,7 +62,6 @@ function validateTranslationQuality(originalText: string, translatedText: string
       const month = parseInt(match[1])
       
       // 원본에 해당 월이 명시적으로 있는지 확인
-      const monthNames = ['', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12']
       const koreanMonthNames = ['', '일', '이', '삼', '사', '오', '육', '칠', '팔', '구', '십', '십일', '십이']
       
       const hasExactMonthInOriginal = 
@@ -95,7 +94,6 @@ function validateTranslationQuality(originalText: string, translatedText: string
       pattern: /\{(\d{1,2})\}\+월\+\{\d{1,2}\}\+일/g,
       check: (match: RegExpMatchArray, original: string) => {
         const month = parseInt(match[1])
-        const monthNames = ['', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12']
         const koreanMonthNames = ['', '일', '이', '삼', '사', '오', '육', '칠', '팔', '구', '십', '십일', '십이']
         
         // 원본에 해당 월이 명시적으로 있는지 확인
@@ -123,21 +121,7 @@ function validateTranslationQuality(originalText: string, translatedText: string
   return true
 }
 
-/**
- * 텍스트에서 모든 숫자를 추출하는 함수
- */
-function extractNumbers(text: string): string[] {
-  const numbers = text.match(/\d+/g) || []
-  return numbers
-}
 
-/**
- * 번역 텍스트에서 중괄호 안의 숫자를 추출하는 함수
- */
-function extractBracketNumbers(text: string): string[] {
-  const bracketNumbers = text.match(/\{(\d+)\}/g) || []
-  return bracketNumbers.map(match => match.replace(/[{}]/g, ''))
-}
 
 /**
  * ⚡ 고속 한국어 텍스트를 수어로 번역하는 함수 (최적화됨)
