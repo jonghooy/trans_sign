@@ -151,8 +151,8 @@ export default function Home() {
   const handleRetryFailed = async () => {
     if (!translationResults || !selectedFile) return
 
-    // 실패한 문장들만 추출 (빈 ai_translation)
-    const failedRows = translationResults.filter(r => r.ai_translation.trim() === '')
+    // 실패한 문장들만 추출 (final_status가 failed_all인 경우)
+    const failedRows = translationResults.filter(r => r.final_status === 'failed_all')
     if (failedRows.length === 0) return
 
     setIsRetrying(true)
@@ -588,13 +588,13 @@ export default function Home() {
               <div className="text-sm text-green-600 space-y-1">
                 <div className="flex justify-between">
                   <span>✅ 번역 성공 (1~3차 시도):</span>
-                  <span className="font-medium">{translationResults.filter(r => !r.ai_translation.startsWith('[번역 실패') && r.ai_translation.trim() !== '').length}개</span>
+                  <span className="font-medium">{translationResults.filter(r => r.final_status && ['success_1st', 'success_2nd', 'success_3rd'].includes(r.final_status)).length}개</span>
                 </div>
                 <div className="flex justify-between">
                   <span>🔄 3차 시도 후에도 품질검증 실패:</span>
-                  <span className="font-medium text-orange-600">{translationResults.filter(r => r.ai_translation.trim() === '').length}개</span>
+                  <span className="font-medium text-orange-600">{translationResults.filter(r => r.final_status === 'failed_all').length}개</span>
                 </div>
-                {translationResults.filter(r => r.ai_translation.trim() === '').length > 0 && (
+                {translationResults.filter(r => r.final_status === 'failed_all').length > 0 && (
                   <div className="text-xs text-gray-500 ml-4">
                     * 3차 시도 시 입력 패턴 변화(마침표 제거) 적용됨
                   </div>
@@ -636,15 +636,15 @@ export default function Home() {
                     {translationResults.filter(r => 
                       r.attempt_1_result || r.attempt_2_result || r.attempt_3_result
                     ).length}개 문장에서 재시도가 수행되었습니다.
-                    {translationResults.filter(r => r.ai_translation.trim() === '').length > 0 && 
-                      ` 그 중 ${translationResults.filter(r => r.ai_translation.trim() === '').length}개는 여전히 실패 상태입니다.`
+                    {translationResults.filter(r => r.final_status === 'failed_all').length > 0 && 
+                      ` 그 중 ${translationResults.filter(r => r.final_status === 'failed_all').length}개는 여전히 실패 상태입니다.`
                     }
                   </p>
                 </div>
               </div>
               
               {/* 재시도 버튼 (실패한 문장이 있을 때만) */}
-              {translationResults.filter(r => r.ai_translation.trim() === '').length > 0 && (
+              {translationResults.filter(r => r.final_status === 'failed_all').length > 0 && (
                 <button
                   onClick={handleRetryFailed}
                   disabled={isTranslating || isRetrying}
@@ -665,7 +665,7 @@ export default function Home() {
                   ) : (
                     <>
                       <Languages className="w-4 h-4 mr-2" />
-                      실패한 {translationResults.filter(r => r.ai_translation.trim() === '').length}개 문장 재시도
+                      실패한 {translationResults.filter(r => r.final_status === 'failed_all').length}개 문장 재시도
                     </>
                   )}
                 </button>
